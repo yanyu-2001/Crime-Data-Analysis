@@ -22,11 +22,20 @@ and merges various data sources, enabling stakeholders to:
 Data Sources:
 --------------
 The pipeline handles the following datasets:
-    1. Crime Data: Includes details of crimes such as type, location, and outcome.
+    1. Crime Data: Includes details of crimes such as type, location, and outcome. Includes street, outcomes and stop-and-search
+    Crime data can be downloaded from: https://data.police.uk/data/
     2. House Price Data: Contains transaction-level data for house prices across multiple regions.
-    3. Stop-and-Search Data: Contains records of stop-and-search events, categorized by gender, ethnicity, and outcomes.
-    4. Summary Statistics: Regional population, area, and budget data used for calculating normalized metrics like 
-       crime per capita and crime per budget.
+    House price data can be downloaded from: https://www.gov.uk/government/statistical-data-sets/price-paid-data-downloads
+    Postcode data can be downloaded from: https://www.doogal.co.uk/UKPostcodes
+    3. Summary Statistics: Regional population, area, and budget data used for calculating normalized metrics like 
+       crime per capita and crime per budget. This data was found on each police force wikipedia. 
+
+Make a folder called 'EastofEngland_Dataset' within this folder there should be:
+    - 'Crime_Dataset' folder which contains all the crime data folders saved from the website
+    (These folders will be saved by year and month i.e., [YYYY]-[MM])
+    - 'House_Price_Dataset' folder with the csvs for relevant years
+    - 'postcodes.csv' file
+    - 'summary_stats.csv' file
 
 Pipeline Layers:
 -----------------
@@ -59,19 +68,8 @@ Error Handling:
 Each step of the pipeline includes error handling and logging to ensure that the data processing is tracked, and any 
 issues can be easily identified. The pipeline will raise appropriate errors for missing data files, inconsistent data, 
 or other issues encountered during execution.
-
-Data sources:
-Crime data can be downloaded from: https://data.police.uk/data/
-House price data can be downloaded from: https://www.gov.uk/government/statistical-data-sets/price-paid-data-downloads
-Postcode data can be downloaded from: https://www.doogal.co.uk/UKPostcodes
-Summary Statistics data can be found on the wikipedia page of each regions police force.
-
-Make a folder called 'EastofEngland_Dataset' within this folder there should be:
-'Crime_Dataset' folder which contains all the crime data folders saved from the website
-(These folders will be saved by year and month i.e., [YYYY]-[MM])
-'House_Price_Dataset' folder with the csvs for relevant years
-'postcodes.csv' file
 """
+
 
 #Packages to Import
 import os
@@ -108,36 +106,56 @@ def import_crime_data(base_path, police_forces):
     dataset_dir = os.path.join(base_path, 'Crime_Dataset')  # Adjust base path to include 'Crime_Dataset'
     logging.info(f'Starting data import from directory: {dataset_dir}')
 
+    # Check if the dataset directory exists
+    if not os.path.exists(dataset_dir):
+        logging.error(f"Dataset directory does not exist: {dataset_dir}")
+        return crime_data
+
     for folder in sorted(os.listdir(dataset_dir)):
         folder_path = os.path.join(dataset_dir, folder)
-        if os.path.isdir(folder_path):
-            logging.info(f'Processing folder: {folder}')
-            successful_imports = []
 
-            for file in sorted(os.listdir(folder_path)):
-                if file.endswith('.csv'):
-                    file_path = os.path.join(folder_path, file)
-                    try:
-                        parts = file[:-4].split('-')  
-                        year_month = parts[0] + '-' + parts[1]
-                        force = parts[2]
-                        data_type = '-'.join(parts[3:])
-                        
-                        if force in police_forces:
-                            key = f'{year_month}-{force}-{data_type}'
+        # Skip if the folder is not a valid directory
+        if not os.path.isdir(folder_path):
+            logging.info(f"Skipping invalid folder: {folder}")
+            continue
+
+        logging.info(f'Processing folder: {folder}')
+        successful_imports = []
+
+        for file in sorted(os.listdir(folder_path)):
+            if file.endswith('.csv'):
+                file_path = os.path.join(folder_path, file)
+
+                # Ensure the file follows the correct naming convention
+                try:
+                    parts = file[:-4].split('-')
+                    if len(parts) < 4:  # Invalid file name structure
+                        logging.warning(f"Skipping incorrectly named file: {file}")
+                        continue
+
+                    year_month = parts[0] + '-' + parts[1]
+                    force = parts[2]
+                    data_type = '-'.join(parts[3:])
+
+                    if force in police_forces:
+                        key = f'{year_month}-{force}-{data_type}'
+                        try:
                             crime_data[key] = pd.read_csv(file_path)
                             successful_imports.append(f"{file} as {key}")
-                    except Exception as e:
-                        logging.error(f'Failed to process {file_path}: {e}')
-            
-            if successful_imports:
-                logging.info(f'Successfully imported files from folder {folder}:\n' + '\n'.join(successful_imports))
-            else:
-                logging.info(f'No files were imported from folder {folder}')
-    
+                        except Exception as e:
+                            logging.error(f'Failed to load file {file}: {e}')
+                            continue  # Continue with the next file if an error occurs
+                except Exception as e:
+                    logging.error(f'Error processing file name {file}: {e}')
+                    continue  # Continue with the next file
+
+        if successful_imports:
+            logging.info(f'Successfully imported files from folder {folder}:\n' + '\n'.join(successful_imports))
+        else:
+            logging.info(f'No files were imported from folder {folder}')
+
     logging.info('Crime data import completed.')
     return crime_data
-
 
 def load_house_price_data(base_path):
     """
@@ -180,7 +198,6 @@ def load_house_price_data(base_path):
     
     return house_price_data
 
-
 def combine_dataframes(crime_data):
     """
     This function combines data frames by concatenating them based on police force and data type.
@@ -209,11 +226,11 @@ def combine_dataframes(crime_data):
                 # Otherwise, start a new DataFrame for this composite key
                 combined_crime_df[composite_key] = df
         except Exception as e:
-            logging.error(f'Error combining data for key {key}: {e}')
+            logging.error(f'Error combining data for key {key}: {e}')  # Log the error
+            continue
 
     logging.info('Finished combining dataframes.')
     return combined_crime_df
-
 
 def check_and_drop_empty_columns(combined_crime_df):
     """
